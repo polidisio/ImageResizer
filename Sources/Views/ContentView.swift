@@ -509,7 +509,7 @@ struct ImageDropDelegate: DropDelegate {
         let providers = info.itemProviders(for: [.fileURL])
 
         for provider in providers {
-            provider.loadObject(ofClass: URL.self) { item, error in
+            _ = provider.loadObject(ofClass: URL.self) { item, error in
                 guard let url = item else { return }
 
                 if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
