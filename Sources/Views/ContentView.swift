@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var customFileName: String = ""
     @State private var showSuccessHint: Bool = false
     @State private var showWidthError: Bool = false
+    @State private var showErrorMessage: String? = nil
     
     // Theme Management
     @AppStorage("selectedTheme") private var selectedTheme: String = "system"
@@ -196,11 +197,12 @@ struct ContentView: View {
                 // Footer Area
                 VStack(spacing: 0) {
                     Divider().background(Color.primary.opacity(0.1))
-                    
-                    VStack {
+
+                    VStack(spacing: 12) {
                         if resizer.isProcessing {
                             processingView
                         } else {
+                            errorBanner
                             footerControls
                         }
                     }
@@ -212,15 +214,26 @@ struct ContentView: View {
         .frame(minWidth: 600, minHeight: 650)
         .preferredColorScheme(currentColorScheme)
         .onChange(of: resizer.isProcessing) { oldValue, newValue in
-            if oldValue == true && newValue == false && !resizer.results.isEmpty {
-                withAnimation {
+            if oldValue == true && newValue == false {
+                if let firstError = resizer.results.first(where: { !$0.success }) {
+                    showErrorMessage = "Error processing \(firstError.originalName): \(firstError.error ?? "Unknown error")"
+                } else if !resizer.results.isEmpty {
                     showSuccessHint = true
-                }
-                Task {
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    withAnimation {
-                        showSuccessHint = false
+                    droppedURLs = []  // Clear after successful resize
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        withAnimation {
+                            showSuccessHint = false
+                        }
                     }
+                }
+            }
+        }
+        .onChange(of: showErrorMessage) { _, newValue in
+            if newValue != nil {
+                Task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    showErrorMessage = nil
                 }
             }
         }
@@ -334,7 +347,7 @@ struct ContentView: View {
                 Text("\(Int(resizer.progress * 100))%")
                     .font(.caption.monospacedDigit())
             }
-            
+
             ProgressView(value: resizer.progress)
                 .progressViewStyle(.linear)
                 .accentColor(accentColor)
@@ -344,6 +357,24 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityLabel("Cancel image processing")
+        }
+    }
+
+    private var errorBanner: some View {
+        Group {
+            if let error = showErrorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.red)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    Spacer()
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.1))
+                .cornerRadius(8)
+            }
         }
     }
     
