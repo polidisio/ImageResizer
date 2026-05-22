@@ -477,14 +477,11 @@ struct ImageDropDelegate: DropDelegate {
         isDragging = false
         let providers = info.itemProviders(for: [.fileURL])
 
-        var hasImages = false
         for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-                guard let data = item as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            provider.loadObject(ofClass: URL.self) { item, error in
+                guard let url = item else { return }
 
                 if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
-                    hasImages = true
                     DispatchQueue.main.async {
                         if !urls.contains(url) {
                             urls.append(url)
@@ -493,15 +490,15 @@ struct ImageDropDelegate: DropDelegate {
                 }
             }
         }
-        return providers.count > 0
+        return true
     }
-    
+
     func dropEntered(info: DropInfo) {
         withAnimation {
             isDragging = true
         }
     }
-    
+
     func dropExited(info: DropInfo) {
         withAnimation {
             isDragging = false
