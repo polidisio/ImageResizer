@@ -170,7 +170,9 @@ class ImageResizer: ObservableObject {
 
         let sourceRect = NSRect(origin: .zero, size: originalSize_cg)
         let destRect = NSRect(origin: .zero, size: newSize)
+        resizedImage.lockFocus()
         image.draw(in: destRect, from: sourceRect, operation: .copy, fraction: 1.0)
+        resizedImage.unlockFocus()
 
         guard let tiffData = resizedImage.tiffRepresentation,
               let bitmapImage = NSBitmapImageRep(data: tiffData) else {
