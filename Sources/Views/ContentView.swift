@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var isDragging: Bool = false
     @State private var customFileName: String = ""
     @State private var showSuccessHint: Bool = false
+    @State private var showWidthError: Bool = false
     
     // Theme Management
     @AppStorage("selectedTheme") private var selectedTheme: String = "system"
@@ -98,12 +99,18 @@ struct ContentView: View {
                         VStack(spacing: 16) {
                             settingsSection(title: "Dimensions", icon: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left") {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    Picker("Preset", selection: $selectedPreset) {
-                                        ForEach(ResizePreset.allCases) { preset in
-                                            Text(preset.rawValue).tag(preset)
+                                    HStack {
+                                        Text("Size")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Spacer()
+                                        Picker("", selection: $selectedPreset) {
+                                            ForEach(ResizePreset.allCases) { preset in
+                                                Text(preset.rawValue).tag(preset)
+                                            }
                                         }
+                                        .frame(width: 160)
                                     }
-                                    .pickerStyle(.segmented)
                                     
                                     HStack(spacing: 15) {
                                         if selectedPreset == .custom {
@@ -119,6 +126,11 @@ struct ContentView: View {
                                             .padding(6)
                                             .background(Color.primary.opacity(0.05))
                                             .cornerRadius(6)
+                                            if showWidthError {
+                                                Text("Enter 1-10000")
+                                                    .font(.caption)
+                                                    .foregroundColor(.red)
+                                            }
                                         }
                                         
                                         Toggle(isOn: $lockAspectRatio) {
@@ -416,16 +428,27 @@ struct ContentView: View {
     
     private func performResize(to destinationURL: URL) {
         let width: CGFloat
+        let height: CGFloat?
+
         if selectedPreset == .custom {
-            width = CGFloat(Double(customWidth) ?? 1080)
+            guard let w = Double(customWidth), w > 0, w <= 10000 else {
+                showWidthError = true
+                return
+            }
+            width = CGFloat(w)
+            height = nil
         } else {
             width = selectedPreset.width ?? 1080
+            height = selectedPreset.height
         }
+
+        showWidthError = false
         
         Task {
             await resizer.resize(
                 urls: droppedURLs,
                 targetWidth: width,
+                targetHeight: height,
                 lockAspectRatio: lockAspectRatio,
                 format: selectedFormat,
                 quality: quality,

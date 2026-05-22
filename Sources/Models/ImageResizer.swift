@@ -22,6 +22,12 @@ enum ResizePreset: String, CaseIterable, Identifiable {
     case p480 = "480p"
     case p720 = "720p"
     case p1080 = "1080p"
+    case mobileClassic = "Smartphone Classic"
+    case mobilePlus = "Smartphone Plus"
+    case mobilePro = "Smartphone Pro"
+    case tabletPro = "Tablet Pro"
+    case desktopStd = "Desktop Standard"
+    case desktopPro = "Desktop Pro"
     case k4 = "4K"
     case custom = "Custom"
     
@@ -32,7 +38,29 @@ enum ResizePreset: String, CaseIterable, Identifiable {
         case .p480: return 640
         case .p720: return 1280
         case .p1080: return 1920
+        case .mobileClassic: return 1242
+        case .mobilePlus: return 1242
+        case .mobilePro: return 1290
+        case .tabletPro: return 2048
+        case .desktopStd: return 2560
+        case .desktopPro: return 2880
         case .k4: return 3840
+        case .custom: return nil
+        }
+    }
+    
+    var height: CGFloat? {
+        switch self {
+        case .p480: return 480
+        case .p720: return 720
+        case .p1080: return 1080
+        case .mobileClassic: return 2208
+        case .mobilePlus: return 2688
+        case .mobilePro: return 2796
+        case .tabletPro: return 2732
+        case .desktopStd: return 1600
+        case .desktopPro: return 1800
+        case .k4: return 2160
         case .custom: return nil
         }
     }
@@ -55,6 +83,7 @@ class ImageResizer: ObservableObject {
     func resize(
         urls: [URL],
         targetWidth: CGFloat,
+        targetHeight: CGFloat?,
         lockAspectRatio: Bool,
         format: ResizeFormat,
         quality: Double,
@@ -70,15 +99,18 @@ class ImageResizer: ObservableObject {
         var completedCount = 0
         let totalCount = urls.count
         
-        for url in urls {
+        for (index, url) in urls.enumerated() {
             let result = await processImage(
                 at: url,
                 targetWidth: targetWidth,
+                targetHeight: targetHeight,
                 lockAspectRatio: lockAspectRatio,
                 format: format,
                 quality: quality,
                 destinationURL: destinationURL,
-                customFileName: customFileName
+                customFileName: customFileName,
+                index: index,
+                total: totalCount
             )
             
             completedCount += 1
@@ -98,11 +130,14 @@ class ImageResizer: ObservableObject {
     private func processImage(
         at url: URL,
         targetWidth: CGFloat,
+        targetHeight: CGFloat?,
         lockAspectRatio: Bool,
         format: ResizeFormat,
         quality: Double,
         destinationURL: URL?,
-        customFileName: String?
+        customFileName: String?,
+        index: Int,
+        total: Int
     ) async -> ProcessingResult {
         let originalSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
         let originalName = url.lastPathComponent
@@ -112,15 +147,21 @@ class ImageResizer: ObservableObject {
         }
         
         let originalSize_cg = image.size
-        let ratio = originalSize_cg.height / originalSize_cg.width
-        let targetHeight = lockAspectRatio ? targetWidth * ratio : originalSize_cg.height
+        let finalHeight: CGFloat
         
-        let newSize = NSSize(width: targetWidth, height: targetHeight)
+        if lockAspectRatio {
+            let ratio = originalSize_cg.height / originalSize_cg.width
+            finalHeight = targetWidth * ratio
+        } else {
+            finalHeight = targetHeight ?? originalSize_cg.height
+        }
+        
+        let newSize = NSSize(width: targetWidth, height: finalHeight)
         let resizedImage = NSImage(size: newSize)
-        
-        resizedImage.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: newSize), from: NSRect(origin: .zero, size: originalSize_cg), operation: .copy, fraction: 1.0)
-        resizedImage.unlockFocus()
+
+        let sourceRect = NSRect(origin: .zero, size: originalSize_cg)
+        let destRect = NSRect(origin: .zero, size: newSize)
+        resizedImage.draw(in: destRect, from: sourceRect, operation: .copy, fraction: 1.0)
         
         guard let tiffData = resizedImage.tiffRepresentation,
               let bitmapImage = NSBitmapImageRep(data: tiffData) else {
@@ -149,7 +190,9 @@ class ImageResizer: ObservableObject {
                 originalURL: url,
                 originalSize: originalSize,
                 destinationURL: destinationURL,
-                customFileName: customFileName
+                customFileName: customFileName,
+                index: index,
+                total: total
             )
         }
         
@@ -157,7 +200,7 @@ class ImageResizer: ObservableObject {
             return ProcessingResult(originalName: originalName, originalSize: originalSize, newSize: 0, success: false, error: "Failed to generate image data")
         }
         
-        let finalDestinationURL = getDestinationURL(originalURL: url, extension: fileExtension, customDir: destinationURL, customFileName: customFileName)
+        let finalDestinationURL = getDestinationURL(originalURL: url, extension: fileExtension, customDir: destinationURL, customFileName: customFileName, index: index, total: total)
         
         do {
             try imageData.write(to: finalDestinationURL)
@@ -175,14 +218,16 @@ class ImageResizer: ObservableObject {
         originalURL: URL,
         originalSize: Int64,
         destinationURL: URL?,
-        customFileName: String?
+        customFileName: String?,
+        index: Int,
+        total: Int
     ) async -> ProcessingResult {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: 0, success: false, error: "Failed to get CGImage")
         }
         
         let fileExtension = format.rawValue.lowercased()
-        let finalDestinationURL = getDestinationURL(originalURL: originalURL, extension: fileExtension, customDir: destinationURL, customFileName: customFileName)
+        let finalDestinationURL = getDestinationURL(originalURL: originalURL, extension: fileExtension, customDir: destinationURL, customFileName: customFileName, index: index, total: total)
         
         guard let destination = CGImageDestinationCreateWithURL(finalDestinationURL as CFURL, format.utType.identifier as CFString, 1, nil) else {
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: 0, success: false, error: "Failed to create image destination")
@@ -202,14 +247,10 @@ class ImageResizer: ObservableObject {
         }
     }
     
-    private func getDestinationURL(originalURL: URL, extension ext: String, customDir: URL?, customFileName: String?) -> URL {
+    private func getDestinationURL(originalURL: URL, extension ext: String, customDir: URL?, customFileName: String?, index: Int, total: Int) -> URL {
         let baseName: String
         if let custom = customFileName, !custom.isEmpty {
-            // If multiple files are processed, we might want to avoid overwriting. 
-            // For now, if customFileName is provided, we use it. 
-            // If it's a batch, we'll append a counter or keep the original behavior.
-            // Let's assume customFileName is a base name or prefix.
-            baseName = custom
+            baseName = "\(custom)_\(index + 1)"
         } else {
             baseName = "\(originalURL.deletingPathExtension().lastPathComponent)_resized"
         }
