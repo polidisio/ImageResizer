@@ -101,7 +101,7 @@ class ImageResizer: ObservableObject {
         let totalCount = urls.count
 
         for (index, url) in urls.enumerated() {
-            if await MainActor.run { self.shouldCancel } {
+            if self.shouldCancel {
                 break
             }
 
