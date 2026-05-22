@@ -6,9 +6,9 @@ enum ResizeFormat: String, CaseIterable, Identifiable {
     case png = "PNG"
     case jpeg = "JPEG"
     case heic = "HEIC"
-    
+
     var id: String { self.rawValue }
-    
+
     var utType: UTType {
         switch self {
         case .png: return .png
@@ -30,9 +30,9 @@ enum ResizePreset: String, CaseIterable, Identifiable {
     case desktopPro = "Desktop Pro"
     case k4 = "4K"
     case custom = "Custom"
-    
+
     var id: String { self.rawValue }
-    
+
     var width: CGFloat? {
         switch self {
         case .p480: return 640
@@ -48,7 +48,7 @@ enum ResizePreset: String, CaseIterable, Identifiable {
         case .custom: return nil
         }
     }
-    
+
     var height: CGFloat? {
         switch self {
         case .p480: return 480
@@ -79,7 +79,8 @@ class ImageResizer: ObservableObject {
     @Published var progress: Double = 0
     @Published var isProcessing: Bool = false
     @Published var results: [ProcessingResult] = []
-    
+    @Published var shouldCancel: Bool = false
+
     func resize(
         urls: [URL],
         targetWidth: CGFloat,
@@ -94,13 +95,17 @@ class ImageResizer: ObservableObject {
             self.isProcessing = true
             self.progress = 0
             self.results = []
+            self.shouldCancel = false
         }
-        
-        var completedCount = 0
+
         let totalCount = urls.count
-        
+
         for (index, url) in urls.enumerated() {
-            let result = await processImage(
+            if await MainActor.run { self.shouldCancel } {
+                break
+            }
+
+            let result = await self.processImage(
                 at: url,
                 targetWidth: targetWidth,
                 targetHeight: targetHeight,
@@ -112,21 +117,25 @@ class ImageResizer: ObservableObject {
                 index: index,
                 total: totalCount
             )
-            
-            completedCount += 1
+
+            let completedCount = index + 1
             let currentProgress = Double(completedCount) / Double(totalCount)
-            
+
             await MainActor.run {
                 self.results.append(result)
                 self.progress = currentProgress
             }
         }
-        
+
         await MainActor.run {
             self.isProcessing = false
         }
     }
-    
+
+    func cancel() {
+        shouldCancel = true
+    }
+
     private func processImage(
         at url: URL,
         targetWidth: CGFloat,
@@ -141,47 +150,46 @@ class ImageResizer: ObservableObject {
     ) async -> ProcessingResult {
         let originalSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
         let originalName = url.lastPathComponent
-        
+
         guard let image = NSImage(contentsOf: url) else {
             return ProcessingResult(originalName: originalName, originalSize: originalSize, newSize: 0, success: false, error: "Could not load image")
         }
-        
+
         let originalSize_cg = image.size
         let finalHeight: CGFloat
-        
+
         if lockAspectRatio {
             let ratio = originalSize_cg.height / originalSize_cg.width
             finalHeight = targetWidth * ratio
         } else {
             finalHeight = targetHeight ?? originalSize_cg.height
         }
-        
+
         let newSize = NSSize(width: targetWidth, height: finalHeight)
         let resizedImage = NSImage(size: newSize)
 
         let sourceRect = NSRect(origin: .zero, size: originalSize_cg)
         let destRect = NSRect(origin: .zero, size: newSize)
         resizedImage.draw(in: destRect, from: sourceRect, operation: .copy, fraction: 1.0)
-        
+
         guard let tiffData = resizedImage.tiffRepresentation,
               let bitmapImage = NSBitmapImageRep(data: tiffData) else {
             return ProcessingResult(originalName: originalName, originalSize: originalSize, newSize: 0, success: false, error: "Failed to create bitmap representation")
         }
-        
-        let properties: [NSBitmapImageRep.PropertyKey: Any] = [
-            .compressionFactor: quality
-        ]
-        
+
         let fileExtension: String
         let bitmapType: NSBitmapImageRep.FileType
-        
+        let properties: [NSBitmapImageRep.PropertyKey: Any]
+
         switch format {
         case .png:
             fileExtension = "png"
             bitmapType = .png
+            properties = [:]  // PNG is lossless, compressionFactor doesn't apply
         case .jpeg:
             fileExtension = "jpg"
             bitmapType = .jpeg
+            properties = [.compressionFactor: quality]
         case .heic:
             return await saveWithCGImageDestination(
                 image: resizedImage,
@@ -195,13 +203,13 @@ class ImageResizer: ObservableObject {
                 total: total
             )
         }
-        
+
         guard let imageData = bitmapImage.representation(using: bitmapType, properties: properties) else {
             return ProcessingResult(originalName: originalName, originalSize: originalSize, newSize: 0, success: false, error: "Failed to generate image data")
         }
-        
+
         let finalDestinationURL = getDestinationURL(originalURL: url, extension: fileExtension, customDir: destinationURL, customFileName: customFileName, index: index, total: total)
-        
+
         do {
             try imageData.write(to: finalDestinationURL)
             let newFileSize = (try? finalDestinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? Int64(imageData.count)
@@ -210,7 +218,7 @@ class ImageResizer: ObservableObject {
             return ProcessingResult(originalName: originalName, originalSize: originalSize, newSize: 0, success: false, error: error.localizedDescription)
         }
     }
-    
+
     private func saveWithCGImageDestination(
         image: NSImage,
         format: ResizeFormat,
@@ -225,20 +233,20 @@ class ImageResizer: ObservableObject {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: 0, success: false, error: "Failed to get CGImage")
         }
-        
+
         let fileExtension = format.rawValue.lowercased()
         let finalDestinationURL = getDestinationURL(originalURL: originalURL, extension: fileExtension, customDir: destinationURL, customFileName: customFileName, index: index, total: total)
-        
+
         guard let destination = CGImageDestinationCreateWithURL(finalDestinationURL as CFURL, format.utType.identifier as CFString, 1, nil) else {
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: 0, success: false, error: "Failed to create image destination")
         }
-        
+
         let options: [CFString: Any] = [
             kCGImageDestinationLossyCompressionQuality: quality
         ]
-        
+
         CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
-        
+
         if CGImageDestinationFinalize(destination) {
             let newFileSize = (try? finalDestinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: newFileSize, success: true, error: nil)
@@ -246,7 +254,7 @@ class ImageResizer: ObservableObject {
             return ProcessingResult(originalName: originalURL.lastPathComponent, originalSize: originalSize, newSize: 0, success: false, error: "Failed to finalize image destination")
         }
     }
-    
+
     private func getDestinationURL(originalURL: URL, extension ext: String, customDir: URL?, customFileName: String?, index: Int, total: Int) -> URL {
         let baseName: String
         if let custom = customFileName, !custom.isEmpty {
@@ -254,9 +262,9 @@ class ImageResizer: ObservableObject {
         } else {
             baseName = "\(originalURL.deletingPathExtension().lastPathComponent)_resized"
         }
-        
+
         let newFileName = "\(baseName).\(ext)"
-        
+
         if let customDir = customDir {
             return customDir.appendingPathComponent(newFileName)
         } else {

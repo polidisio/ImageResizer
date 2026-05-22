@@ -83,6 +83,7 @@ struct ContentView: View {
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Change theme")
                     .help("Change Theme")
                 }
                 .padding(.horizontal, 20)
@@ -215,7 +216,8 @@ struct ContentView: View {
                 withAnimation {
                     showSuccessHint = true
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
                     withAnimation {
                         showSuccessHint = false
                     }
@@ -276,6 +278,7 @@ struct ContentView: View {
                                 .padding(.vertical, 6)
                         }
                         .buttonStyle(.bordered)
+                        .accessibilityLabel("Browse files button")
                         .padding(.top, 5)
                     }
                 } else {
@@ -335,6 +338,12 @@ struct ContentView: View {
             ProgressView(value: resizer.progress)
                 .progressViewStyle(.linear)
                 .accentColor(accentColor)
+
+            Button("Cancel") {
+                resizer.cancel()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Cancel image processing")
         }
     }
     
